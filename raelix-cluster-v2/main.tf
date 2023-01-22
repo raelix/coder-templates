@@ -88,7 +88,7 @@ resource "coder_app" "code-server" {
   slug         = "code-server"
   display_name = "code-server"
   icon         = "/icon/code.svg"
-  url          = "http://localhost:13337?folder=/home/coder"
+  url          = "http://localhost:13337?folder=/home/coder/raelix-cluster-v2"
   subdomain    = false
   share        = "owner"
 
