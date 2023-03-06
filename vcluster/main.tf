@@ -100,12 +100,14 @@ resource "coder_agent" "main" {
       cp /etc/skel/.bashrc $HOME
     fi
 
+    # install kubectl
+    curl -LO https://dl.k8s.io/release/v1.26.0/bin/linux/amd64/kubectl
+    chmod +x kubectl
+    mv ./kubectl /usr/local/bin/kubectl 2>&1  | tee code-server-install.log
+    # end
     # install and start code-server
     curl -fsSL https://code-server.dev/install.sh | sh -s -- --version 4.8.3 | tee code-server-install.log
     code-server --auth none --port 13337 | tee code-server-install.log &
-    # install kubectl
-    curl -LO https://dl.k8s.io/release/v1.26.0/bin/linux/amd64/kubectl
-    install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
     # end
     echo "Cloning $GIT_PROJECT" | tee code-server-install.log 
     mkdir -p ~/.ssh
@@ -180,7 +182,19 @@ resource "kubernetes_persistent_volume_claim" "home" {
   }
 }
 
+locals {
+  # "loft login $LOFT_URL --insecure --access-key $LOFT_ACCESS_KEY && loft use vcluster $VCLUSTER_NAME && kubectl config set-credentials administrator --token $LOFT_ACCESS_KEY && kubectl config set-context --current --user=administrator && install -c -o 1000 -g 1000  ~/.kube/config /home/coder/.kube/config"
+  init_command = <<EOF
+loft login $LOFT_URL --insecure --access-key $LOFT_ACCESS_KEY && 
+loft use vcluster $VCLUSTER_NAME && 
+kubectl config set-credentials administrator --token $LOFT_ACCESS_KEY && 
+kubectl config set-context --current --user=administrator &&
+install -c -o 1000 -g 1000  ~/.kube/config /home/coder/.kube/config
+EOF
+}
+
 resource "kubernetes_pod" "main" {
+  depends_on = [ loft_virtual_cluster.vcluster_with_sleep_mode ]
   count = data.coder_workspace.me.start_count
   metadata {
     name      = "coder-${lower(data.coder_workspace.me.owner)}-${lower(data.coder_workspace.me.name)}"
@@ -208,7 +222,11 @@ resource "kubernetes_pod" "main" {
     init_container {
       name    = "init"
       image = "loftsh/loft-ci:latest"
-      command = ["sh", "-c", "loft login $LOFT_URL --insecure --access-key $LOFT_ACCESS_KEY && loft use vcluster $VCLUSTER_NAME && install -c -o 1000 -g 1000  ~/.kube/config /home/coder/.kube/config"]
+      command = [
+      "sh", 
+      "-c",
+      local.init_command
+       ]
       security_context {
         run_as_user = "0"
       }
