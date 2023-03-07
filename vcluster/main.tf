@@ -72,16 +72,93 @@ provider "loft" {
   insecure   = true
 }
 
+resource "kubernetes_ingress_v1" "vcluster_ingress" {
+  depends_on = [ loft_virtual_cluster.vcluster_with_sleep_mode ]
+  
+  metadata {
+    name = "external-ingress"
+    namespace = resource.loft_space.sleep_after.name
+    annotations = {
+      "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS"
+      "nginx.ingress.kubernetes.io/ssl-passthrough" = "true"
+      "nginx.ingress.kubernetes.io/ssl-redirect" = "true"
+    }
+  }
+
+  spec {
+    rule {
+      host = "${resource.loft_space.sleep_after.name}.raelix.com"
+      http {
+        path {
+          backend {
+            service {
+              name = resource.loft_space.sleep_after.name
+              port {
+                number = 443
+              }
+            }
+          }
+          path = "/"
+        }
+      }
+    }
+    ingress_class_name = "nginx"
+    tls {
+      hosts = ["${resource.loft_space.sleep_after.name}.raelix.com"]
+      # secret_name = "${resource.loft_space.sleep_after.cluster}.raelix.com"
+    }
+  }
+}
+
+data "kubernetes_secret_v1" "kubeconfig" {
+  depends_on = [ loft_virtual_cluster.vcluster_with_sleep_mode ]
+  metadata {
+    name = "vc-${resource.loft_space.sleep_after.name}"
+    namespace = resource.loft_space.sleep_after.name
+  }
+}
+
+resource "coder_metadata" "pod_info" {
+  depends_on = [data.coder_workspace.me, kubernetes_pod.main, data.kubernetes_secret_v1.kubeconfig, loft_virtual_cluster.vcluster_with_sleep_mode]
+  count = data.coder_workspace.me.start_count
+  resource_id = kubernetes_pod.main[0].id
+  item {
+    key   = "kubeconfig"
+    value = yamlencode(local.out)
+  }
+}
+
+locals {
+  secret = yamldecode(data.kubernetes_secret_v1.kubeconfig.data["config"])
+
+  merged = merge(local.secret.clusters[0].cluster, {server: "https://${resource.loft_space.sleep_after.name}.raelix.com"})
+
+  dmerged = merge(local.secret.clusters[0], {cluster: local.merged})
+
+  out = merge(yamldecode(data.kubernetes_secret_v1.kubeconfig.data["config"]), 
+  {clusters: [local.dmerged]})
+}
+
+
 resource "loft_space" "sleep_after" {
   name        = "coder-${lower(data.coder_workspace.me.owner)}-${lower(data.coder_workspace.me.name)}-home"
   cluster     = "loft-cluster"
   # sleep_after = "1h" # Sleep after 1 hour of inactivity
 }
 
+locals {
+  values =<<EOF
+syncer:
+  extraArgs:
+  - --tls-san=${resource.loft_space.sleep_after.name}.raelix.com
+EOF
+}
+
 resource "loft_virtual_cluster" "vcluster_with_sleep_mode" {
   name      = "coder-${lower(data.coder_workspace.me.owner)}-${lower(data.coder_workspace.me.name)}-home"
   cluster   = resource.loft_space.sleep_after.cluster
   namespace = resource.loft_space.sleep_after.name
+  values = local.values
 }
 
 data "coder_workspace" "me" {}
@@ -183,7 +260,6 @@ resource "kubernetes_persistent_volume_claim" "home" {
 }
 
 locals {
-  # "loft login $LOFT_URL --insecure --access-key $LOFT_ACCESS_KEY && loft use vcluster $VCLUSTER_NAME && kubectl config set-credentials administrator --token $LOFT_ACCESS_KEY && kubectl config set-context --current --user=administrator && install -c -o 1000 -g 1000  ~/.kube/config /home/coder/.kube/config"
   init_command = <<EOF
 loft login $LOFT_URL --insecure --access-key $LOFT_ACCESS_KEY && 
 loft use vcluster $VCLUSTER_NAME && 
