@@ -297,7 +297,7 @@ resource "kubernetes_pod" "main" {
     }
     init_container {
       name    = "init"
-      image = "loftsh/loft-ci:latest"
+      image = "loftsh/loft-ci:3.0.0-rc.0"
       command = [
       "sh", 
       "-c",
